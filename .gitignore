@@ -1,0 +1,18 @@
+# PCL copy/checkout and built libraries
+/build/
+
+# Built modules (CI publishes them as workflow artifacts)
+/bin/
+
+# Object files
+/macosx/g++/arm64/
+/macosx/g++/x64/
+/linux/g++/x64/
+/windows/vc17/x64/
+/windows/vc17/.vs/
+*.vcxproj.user
+
+.DS_Store
+
+# Claude Code session data
+.claude/

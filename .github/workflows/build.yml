@@ -1,0 +1,98 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      pcl_ref:
+        description: 'PCL git ref (branch, tag or commit) of https://gitlab.com/pixinsight/PCL'
+        default: 'master'
+
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PCL_REPO: https://gitlab.com/pixinsight/PCL.git
+  PCL_REF: ${{ inputs.pcl_ref || 'master' }}
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Built on Ubuntu 22.04 (glibc 2.35) so the module also loads on
+          # older distributions; GCC 12 for C++20.
+          - target: linux-x64
+            os: ubuntu-22.04
+            arch: x64
+          - target: macosx-arm64
+            os: macos-15
+            arch: arm64
+          # Intel build is cross-compiled on the Apple Silicon runner.
+          - target: macosx-x64
+            os: macos-15
+            arch: x64
+          # Pinned to the image that provides Visual Studio 2022 (toolset v143).
+          - target: windows-x64
+            os: windows-2022
+            arch: x64
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch PCL
+        id: pcl
+        run: |
+          git init -q build/PCL
+          git -C build/PCL remote add origin "$PCL_REPO"
+          git -C build/PCL fetch -q --depth 1 origin "$PCL_REF"
+          git -C build/PCL checkout -q FETCH_HEAD
+          echo "commit=$(git -C build/PCL rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "PCL $PCL_REF -> $(git -C build/PCL rev-parse HEAD)"
+
+      - name: Cache PCL libraries
+        uses: actions/cache@v4
+        with:
+          path: build/PCL/lib/${{ matrix.target }}
+          key: pcl-${{ matrix.target }}-${{ matrix.os }}-${{ steps.pcl.outputs.commit }}-${{ hashFiles('build.sh', 'windows/vc17/PCL.vcxproj') }}
+
+      - name: Set up GCC 12
+        if: runner.os == 'Linux'
+        run: |
+          if ! command -v g++-12 > /dev/null; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q g++-12
+          fi
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100 --slave /usr/bin/g++ g++ /usr/bin/g++-12
+          g++ --version
+
+      - name: Set up MSBuild
+        if: runner.os == 'Windows'
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+
+      - name: Build
+        run: ./build.sh --arch=${{ matrix.arch }}
+
+      - name: Upload module
+        uses: actions/upload-artifact@v4
+        with:
+          name: Finder-${{ matrix.target }}
+          path: |
+            bin/${{ matrix.target }}/Finder-pxm.dylib
+            bin/${{ matrix.target }}/Finder-pxm.so
+            bin/${{ matrix.target }}/Finder-pxm.dll
+          if-no-files-found: error
+          retention-days: 30
