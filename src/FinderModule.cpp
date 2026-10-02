@@ -25,6 +25,12 @@
 #include <memory>
 #include <vector>
 
+#define MODULE_VERSION_MAJOR     1
+#define MODULE_VERSION_MINOR     0
+#define MODULE_VERSION_REVISION  0
+#define MODULE_VERSION_BUILD     0
+#define MODULE_VERSION_LANGUAGE  eng
+
 using namespace pcl;
 
 #ifndef PIXINSIGHT_SCRIPT_DIR
@@ -73,7 +79,11 @@ public:
 
    const char* Version() const override
    {
-      return PCL_MODULE_VERSION( 01, 00, 00, 0001, eng );
+      return PCL_MODULE_VERSION( MODULE_VERSION_MAJOR,
+                                 MODULE_VERSION_MINOR,
+                                 MODULE_VERSION_REVISION,
+                                 MODULE_VERSION_BUILD,
+                                 MODULE_VERSION_LANGUAGE );
    }
 
    void OnLoad() override;
