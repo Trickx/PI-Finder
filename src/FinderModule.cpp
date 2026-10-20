@@ -19,6 +19,15 @@
 #include <pcl/Timer.h>
 #include <pcl/TreeBox.h>
 
+#if defined( __PCL_MACOSX )
+#  include <CoreGraphics/CoreGraphics.h>
+#elif defined( __PCL_WINDOWS )
+#  define NOMINMAX
+#  include <windows.h>
+#else
+#  include <X11/Xlib.h>
+#endif
+
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
@@ -43,6 +52,114 @@ using namespace pcl;
 
 namespace
 {
+
+void RestoreVisiblePosition( Control& window, const pcl::Point* savedPosition )
+{
+   auto isFullyOnDisplay = []( const pcl::Rect& windowRect, const pcl::Rect& displayRect )
+   {
+      return windowRect.x0 >= displayRect.x0 && windowRect.y0 >= displayRect.y0 &&
+             windowRect.x1 <= displayRect.x1 && windowRect.y1 <= displayRect.y1;
+   };
+
+   auto moveToDisplayCenter = [&window]( const pcl::Rect& displayRect )
+   {
+      window.Move( displayRect.x0 + (displayRect.Width() - window.FrameWidth())/2,
+                   displayRect.y0 + (displayRect.Height() - window.FrameHeight())/2 );
+   };
+
+   pcl::Rect windowRect = window.FrameRect();
+   if ( savedPosition != nullptr )
+   {
+      windowRect.x1 = savedPosition->x + windowRect.Width();
+      windowRect.y1 = savedPosition->y + windowRect.Height();
+      windowRect.x0 = savedPosition->x;
+      windowRect.y0 = savedPosition->y;
+   }
+
+#if defined( __PCL_MACOSX )
+   uint32_t displayCount = 0;
+   if ( CGGetActiveDisplayList( 0, nullptr, &displayCount ) != kCGErrorSuccess || displayCount == 0 )
+      return;
+
+   std::vector<CGDirectDisplayID> displays( displayCount );
+   if ( CGGetActiveDisplayList( displayCount, displays.data(), &displayCount ) != kCGErrorSuccess )
+      return;
+
+   pcl::Rect primaryDisplay;
+   std::vector<pcl::Rect> displayRects;
+   for ( uint32_t i = 0; i < displayCount; ++i )
+   {
+      CGRect bounds = CGDisplayBounds( displays[i] );
+      pcl::Rect displayRect( int( bounds.origin.x ), int( bounds.origin.y ),
+                             int( bounds.origin.x + bounds.size.width ),
+                             int( bounds.origin.y + bounds.size.height ) );
+      if ( i == 0 )
+         primaryDisplay = displayRect;
+      if ( displays[i] == CGMainDisplayID() )
+         primaryDisplay = displayRect;
+      displayRects.push_back( displayRect );
+   }
+
+   for ( const pcl::Rect& displayRect : displayRects )
+      if ( isFullyOnDisplay( windowRect, displayRect ) )
+      {
+         if ( savedPosition != nullptr )
+            window.Move( *savedPosition );
+         return;
+      }
+   if ( displayRects.empty() )
+      return;
+   moveToDisplayCenter( primaryDisplay );
+#elif defined( __PCL_WINDOWS )
+   struct DisplayRectangles
+   {
+      std::vector<pcl::Rect> displays;
+      pcl::Rect primary;
+      bool hasPrimary = false;
+   } displayRects;
+   EnumDisplayMonitors( nullptr, nullptr,
+      []( HMONITOR monitor, HDC, LPRECT bounds, LPARAM data ) -> BOOL
+      {
+         auto& rectangles = *reinterpret_cast<DisplayRectangles*>( data );
+         pcl::Rect displayRect( bounds->left, bounds->top, bounds->right, bounds->bottom );
+         rectangles.displays.push_back( displayRect );
+         MONITORINFO monitorInfo = { sizeof( MONITORINFO ) };
+         if ( GetMonitorInfo( monitor, &monitorInfo ) && (monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0 )
+         {
+            rectangles.primary = displayRect;
+            rectangles.hasPrimary = true;
+         }
+         if ( rectangles.displays.size() == 1 && !rectangles.hasPrimary )
+            rectangles.primary = displayRect;
+         return TRUE;
+      }, reinterpret_cast<LPARAM>( &displayRects ) );
+
+   for ( const pcl::Rect& displayRect : displayRects.displays )
+      if ( isFullyOnDisplay( windowRect, displayRect ) )
+      {
+         if ( savedPosition != nullptr )
+            window.Move( *savedPosition );
+         return;
+      }
+   if ( !displayRects.displays.empty() )
+      moveToDisplayCenter( displayRects.primary );
+#else
+   Display* display = XOpenDisplay( nullptr );
+   if ( display == nullptr )
+      return;
+
+   int screen = DefaultScreen( display );
+   pcl::Rect displayRect( 0, 0, XDisplayWidth( display, screen ), XDisplayHeight( display, screen ) );
+   XCloseDisplay( display );
+   if ( isFullyOnDisplay( windowRect, displayRect ) )
+   {
+      if ( savedPosition != nullptr )
+         window.Move( *savedPosition );
+   }
+   else
+      moveToDisplayCenter( displayRect );
+#endif
+}
 
 const char* const SearchIconSVG =
    "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'>"
@@ -376,7 +493,10 @@ public:
       try
       {
          if ( m_gui == nullptr )
+         {
             InitializeControls();
+            m_visibilityCheckPending = true;
+         }
 
          // Loaded once per session so that icon bitmaps are never released.
          if ( m_entries.empty() )
@@ -530,6 +650,8 @@ private:
    bool m_windowActive = true;
    bool m_launchedFromInstance = false;
    bool m_executingInstance = false;
+   bool m_visibilityCheckPending = false;
+   bool m_savePositionEnabled = false;
    bool m_collapsed = false;
    int m_expandedWidth = 0;
    bool m_resultsHeightMeasured = false;
@@ -606,6 +728,14 @@ private:
    {
       return "Interfaces/Finder/OpenAtStartup";
    }
+
+   void SaveWindowPosition( const pcl::Point& position ) const
+   {
+      IsoString key = SettingsKey() + "Geometry/";
+      Settings::Write( key + "Left", position.x );
+      Settings::Write( key + "Top", position.y );
+   }
+
    std::vector<std::unique_ptr<SearchEntry>> m_entries;
 
    void InitializeControls()
@@ -637,8 +767,8 @@ private:
       m_gui->sizer.Add( m_gui->results, 100 );
       SetSizer( m_gui->sizer );
       SetWindowTitle( "Finder" );
+      OnMove( (Control::move_event_handler)&FinderInterface::e_WindowMoved, *this );
       AdjustToContents();
-      RestoreGeometry();
       // Only the position is restored; every session starts at the default width.
       Resize( LogicalPixelsToPhysical( ExpandedSearchWidth + 2*8 ), Height() );
 
@@ -815,12 +945,29 @@ private:
 
    void e_FocusTimer( Timer& )
    {
+      if ( m_visibilityCheckPending && IsVisible() )
+      {
+         m_visibilityCheckPending = false;
+         IsoString key = SettingsKey() + "Geometry/";
+         pcl::Point savedPosition = Position();
+         bool hasSavedPosition = Settings::Read( key + "Left", savedPosition.x ) &&
+                                 Settings::Read( key + "Top", savedPosition.y );
+         RestoreVisiblePosition( *this, hasSavedPosition ? &savedPosition : nullptr );
+         m_savePositionEnabled = true;
+         SaveWindowPosition( Position() );
+      }
       if ( !IsVisible() )
          return;
       bool active = IsActiveWindow();
       if ( m_windowActive && !active && MinimizeWithoutFocus() )
          Collapse();
       m_windowActive = active;
+   }
+
+   void e_WindowMoved( Control&, const pcl::Point& newPosition, const pcl::Point& )
+   {
+      if ( m_savePositionEnabled )
+         SaveWindowPosition( newPosition );
    }
 
    // Clicking into the search line (or activating the window) expands it.

@@ -38,7 +38,7 @@ LDFLAGS = -arch $(CLANG_ARCH) -fPIC -headerpad_max_install_names -Wl,-syslibroot
    -mmacosx-version-min=14 -stdlib=libc++ -Wl,-dead_strip -dynamiclib \
    -install_name @executable_path/$(MODULE) -L"$(PCLLIBDIR64)"
 
-LIBS = -framework AppKit -lpthread -lPCL-pxi -llz4-pxi -lzstd-pxi -lzlib-pxi -lRFC6234-pxi -llcms-pxi
+LIBS = -framework AppKit -framework CoreGraphics -lpthread -lPCL-pxi -llz4-pxi -lzstd-pxi -lzlib-pxi -lRFC6234-pxi -llcms-pxi
 
 .PHONY: all
 all: $(OBJ_DIR)/$(MODULE)

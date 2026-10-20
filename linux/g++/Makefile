@@ -24,7 +24,7 @@ CXXFLAGS = -c -pipe -pthread -m64 -fPIC -D_REENTRANT -D__PCL_LINUX -D__PCL_AVX2 
 LDFLAGS = -m64 -fPIC -pthread -Wl,--enable-new-dtags -Wl,-z,noexecstack -Wl,-O1 -Wl,--gc-sections \
    -rdynamic -shared -L"$(PCLLIBDIR64)"
 
-LIBS = -lpthread -lPCL-pxi -llz4-pxi -lzstd-pxi -lzlib-pxi -lRFC6234-pxi -llcms-pxi
+LIBS = -lX11 -lpthread -lPCL-pxi -llz4-pxi -lzstd-pxi -lzlib-pxi -lRFC6234-pxi -llcms-pxi
 
 .PHONY: all
 all: $(OBJ_DIR)/$(MODULE)
