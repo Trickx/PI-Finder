@@ -476,9 +476,10 @@ public:
    // Drag object (blue triangle): an instance opens the search window when
    // executed, e.g. from a process icon. The options live in the preferences
    // dialog, so the window itself only holds the search line and results.
+   // Browse Documentation opens doc/tools/Finder/Finder.html.
    InterfaceFeatures Features() const override
    {
-      return InterfaceFeature::DragObject | InterfaceFeature::PreferencesButton;
+      return InterfaceFeature::DragObject | InterfaceFeature::BrowseDocumentationButton | InterfaceFeature::PreferencesButton;
    }
 
    void EditPreferences() override

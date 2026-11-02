@@ -60,6 +60,17 @@ angezeigt:
 
 Skripte ohne (ladbares) Icon erhalten ein generisches Dokument-Icon.
 
+## Dokumentation
+
+Die Referenzdokumentation (Knopf *Browse Documentation* im Finder-Fenster)
+steht in [doc/Finder.pidoc](doc/Finder.pidoc), ihre Bilder in `doc/images/`.
+`./doc/make-doc.sh` legt in `doc/build/system/` ein leeres PIDoc-System an und
+gibt den Befehl aus, mit dem sie in PixInsight kompiliert wird (im Dialog des
+Compilers *Target System* auf diesen Ordner setzen und einmal im Dialog
+kompilieren; nur dann wird die Einstellung gespeichert). Das Ergebnis,
+`doc/build/system/tools/Finder/`, wird mit dem Modul als `doc/tools/Finder/`
+installiert.
+
 ## Bauen
 
 Fertige (unsignierte) Module für alle Plattformen erzeugt der

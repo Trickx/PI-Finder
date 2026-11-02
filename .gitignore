@@ -16,3 +16,6 @@
 
 # Claude Code session data
 .claude/
+
+# Compiled documentation (doc/make-doc.sh, then compiled in PixInsight)
+/doc/build/

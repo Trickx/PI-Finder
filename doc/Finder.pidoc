@@ -1,0 +1,110 @@
+\documentclass PIToolDoc
+\tool Finder
+\module Finder
+\categories { Tricx }
+\keywords { search, launcher, process, script, feature script, quick access }
+\author { Sven Kopetzki }
+\copyright { 2026 Sven Kopetzki }
+\brief { Search and launch installed processes and PJSR scripts by name. }
+
+\description {
+Finder is a compact search window for all processes and feature scripts installed in PixInsight.
+While you type, it lists the processes and scripts whose names contain the search text; \k {Return} or a double click launches the selected one.
+This way any process or script is only a few keystrokes away, without searching through the Process and Script menus.
+
+\figure {
+\figtag \s {Finder.} Typing a part of a name lists the matching processes and scripts, each with its icon; the first match is selected.
+\image images/Finder.png
+}
+
+Finder is available as \m {Process > Tricx > Finder}.
+Optionally it opens when PixInsight starts and stays in the background as a narrow search line, ready for the next search.
+}
+
+\usage {
+\subsection { Searching } {
+\list {
+   { The result list appears as soon as you type into the search field. }
+   { Only the names of processes and scripts are searched, ignoring case; the text may be anywhere in the name (\c {stretch} finds \c {AdaptiveStretch} and \c {ArcsinhStretch}). }
+   { The list is sorted alphabetically and shows three rows; scroll to see further matches. A tooltip shows the identifier of a process or the full path of a script. }
+}
+}
+
+\subsection { Keys and mouse } {
+\definition {
+   { \k {Up}, \k {Down} }
+   { Move the selection by one row. }
+   { \k {Page Up}, \k {Page Down} }
+   { Move the selection by ten rows. }
+   { \k {Return} }
+   {
+Launches the selected process or runs the selected script globally.
+The search field is cleared and the result list is hidden; the window stays open in the background unless \lref close_after_launch {Close after launch} is enabled.
+   }
+   { Double click }
+   { Launches the process or script under the mouse pointer, as \k {Return}. }
+   { \k {Escape} }
+   { Clears the search field. The window is never closed by it. }
+}
+}
+
+\subsection { Interface buttons } {
+\definition {
+   { New instance (blue triangle) }
+   {
+Drag it onto the workspace to create a Finder process icon.
+Executing the icon (or double-clicking it) opens the search window; opened this way, the window always closes after launching a process or script.
+   }
+   { Browse documentation }
+   { Opens this document. }
+   { Preferences (wrench) }
+   { Opens the \lref preferences {preferences} of Finder. }
+}
+}
+
+\subsection { \label preferences Preferences } {
+The preferences are stored with the PixInsight settings and apply to all sessions.
+
+\definition {
+   { Open at startup }
+   { Opens Finder automatically when PixInsight starts. The window position is restored across sessions. }
+   { \label close_after_launch Close after launch }
+   {
+Closes Finder after launching a process or script with \k {Return}.
+Otherwise the window stays open behind the launched process or script (as a narrow search line, if \s {Minimize} is enabled).
+   }
+   { Minimize }
+   {
+Shrinks Finder to a narrow search line while it does not have the focus.
+Clicking into the search line, or launching Finder again, restores the full window.
+Enabled by default.
+   }
+}
+}
+
+\subsection { Indexed scripts } {
+Finder lists the \e {feature scripts} of these folders and their subfolders:
+
+\list {
+   { The standard script folder of the running PixInsight installation, \c {src/scripts} in its installation folder. }
+   { \c {~/PixInsight/Scripts} and \c {~/Documents/PixInsight/Scripts}, if they exist. }
+   { Further folders in the environment variable \c {PIXINSIGHT_SCRIPT_PATHS}, separated as in \c {PATH}: by semicolons on Windows, by colons on macOS and Linux. }
+}
+
+A JavaScript file (\c {.js}) is listed only if it declares a \c {#feature-id} directive, as PixInsight requires for the Script menu.
+Files without it are mostly parts that a main script includes with \c {#include}; run on their own, they fail.
+Command scripts (\c {.scp}) are always listed.
+
+A script is shown with the icon of its \c {#feature-icon} directive (SVG, XPM, PNG and other formats); a relative path is resolved from the folder of the script, \c {@script_icons_dir/} from \c {rsc/icons/script} of the installation.
+Scripts without a loadable icon get a generic document icon.
+
+\note {
+The list is built when Finder is opened for the first time in a session. Scripts installed later appear after a restart of PixInsight.
+}
+}
+}
+
+\related https://tricx.de/pi-scripts/Finder/ { Finder update repository }
+\related https://github.com/Trickx/PI-Finder { Finder source code }
+
+\make
