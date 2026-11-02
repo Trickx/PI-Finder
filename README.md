@@ -37,11 +37,17 @@ Finder steht im Menü unter **Process > Tricx > Finder**.
 
 ## Skriptordner
 
-Das Modul durchsucht den standardmäßigen PixInsight-Skriptordner
-`/Applications/PixInsight/src/scripts` sowie `~/PixInsight/Scripts` und
-`~/Documents/PixInsight/Scripts`. Zusätzliche Skriptordner lassen sich über die
-Umgebungsvariable `PIXINSIGHT_SCRIPT_PATHS` angeben; mehrere Ordner werden auf
-macOS mit Doppelpunkten getrennt.
+Das Modul durchsucht den Standard-Skriptordner der laufenden
+PixInsight-Installation (`<PixInsight>/src/scripts`, auf allen Plattformen)
+sowie `~/PixInsight/Scripts` und `~/Documents/PixInsight/Scripts`. Zusätzliche
+Skriptordner lassen sich über die Umgebungsvariable `PIXINSIGHT_SCRIPT_PATHS`
+angeben; mehrere Ordner werden wie bei `PATH` getrennt: unter Windows mit
+Semikolons, sonst mit Doppelpunkten.
+
+Gelistet werden nur Skripte mit einer `#feature-id`-Direktive (wie im
+Script-Menü von PixInsight); `.js`-Dateien ohne sie sind meist Teile, die ein
+Hauptskript per `#include` einbindet, und lassen sich allein nicht starten.
+`.scp`-Kommandoskripte werden immer gelistet.
 
 ## Skript-Icons
 
@@ -87,9 +93,7 @@ PCL wird aus `build/PCL` verwendet. Fehlt der Ordner, werden Header und
 Quellen aus der lokalen PixInsight-Installation kopiert (`--pi=<dir>` für einen
 anderen Ort). Die PCL-Bibliotheken werden einmal pro Ziel nach
 `build/PCL/lib/<platform>-<arch>` gebaut, das Modul landet in
-`bin/<platform>-<arch>/`. Bei einer abweichenden PixInsight-Installation muss
-der Standard-Skriptordner beim Kompilieren mit `PIXINSIGHT_SCRIPT_DIR`
-überschrieben werden.
+`bin/<platform>-<arch>/`.
 
 Dem öffentlichen PCL-Repository fehlt das Windows-Projekt der PCL-Bibliothek
 selbst; [windows/vc17/PCL.vcxproj](windows/vc17/PCL.vcxproj) ersetzt es.

@@ -42,14 +42,6 @@
 
 using namespace pcl;
 
-#ifndef PIXINSIGHT_SCRIPT_DIR
-#  ifdef __PCL_MACOSX
-#    define PIXINSIGHT_SCRIPT_DIR "/Applications/PixInsight/src/scripts"
-#  else
-#    define PIXINSIGHT_SCRIPT_DIR ""
-#  endif
-#endif
-
 namespace
 {
 
@@ -303,20 +295,27 @@ void AddUniquePath( std::vector<String>& paths, const String& path )
 std::vector<String> ScriptSearchPaths()
 {
    std::vector<String> paths;
-   AddUniquePath( paths, String( PIXINSIGHT_SCRIPT_DIR ) );
+   // The standard script folder of the running installation, on every platform.
+   AddUniquePath( paths, PixInsightSettings::GlobalString( "Application/SrcDirectory" ) + "/scripts" );
 
    String home = File::HomeDirectory();
    AddUniquePath( paths, home + "/PixInsight/Scripts" );
    AddUniquePath( paths, home + "/Documents/PixInsight/Scripts" );
 
-   // Additional roots can be provided as a colon-separated list.
+   // Additional roots can be provided as a list, separated as PATH is: by
+   // semicolons on Windows (drive letters contain colons), else by colons.
+#ifdef __PCL_WINDOWS
+   const char listSeparator = ';';
+#else
+   const char listSeparator = ':';
+#endif
    if ( const char* extraPaths = std::getenv( "PIXINSIGHT_SCRIPT_PATHS" ) )
    {
       String list( extraPaths );
       while ( !list.IsEmpty() )
       {
          String path;
-         size_type separator = list.FindFirst( ':' );
+         size_type separator = list.FindFirst( listSeparator );
          if ( separator == String::notFound )
          {
             path = list;
@@ -349,13 +348,22 @@ String FindFileRecursive( const String& directory, const String& fileName )
    return String();
 }
 
+// Whether a script declares a #feature-id directive. PixInsight lists only
+// such scripts as features; other .js files are mostly modules included by a
+// main script and fail when run on their own.
+bool IsFeatureScript( const IsoStringList& lines )
+{
+   for ( const IsoString& line : lines )
+      if ( line.Trimmed().StartsWith( "#feature-id" ) )
+         return true;
+   return false;
+}
+
 // Resolves the #feature-icon directive of a script. Returns an empty string
 // if the script declares no icon or the icon file does not exist.
-String ScriptIconPath( const String& scriptPath )
+String ScriptIconPath( const String& scriptPath, const IsoStringList& lines )
 {
    IsoString iconSpec;
-   IsoStringList lines;
-   File::ReadTextFile( scriptPath ).Break( lines, '\n' );
    for ( const IsoString& line : lines )
    {
       IsoString directive = line.Trimmed();
@@ -405,8 +413,8 @@ void EnumerateScripts( const String& directory, std::vector<std::unique_ptr<Sear
       }
 
       String extension = File::ExtractExtension( info.name );
-      if ( (extension.FindFirstIC( ".js" ) == 0 && extension.Length() == 3) ||
-           (extension.FindFirstIC( ".scp" ) == 0 && extension.Length() == 4) )
+      bool isJavaScript = extension.FindFirstIC( ".js" ) == 0 && extension.Length() == 3;
+      if ( isJavaScript || (extension.FindFirstIC( ".scp" ) == 0 && extension.Length() == 4) )
       {
          String scriptPath = File::FullPath( path );
          bool alreadyIndexed = std::any_of( entries.begin(), entries.end(),
@@ -417,12 +425,23 @@ void EnumerateScripts( const String& directory, std::vector<std::unique_ptr<Sear
          if ( alreadyIndexed )
             continue;
 
+         IsoStringList lines;
+         try
+         {
+            File::ReadTextFile( scriptPath ).Break( lines, '\n' );
+         }
+         catch ( ... )
+         {
+         }
+         if ( isJavaScript && !IsFeatureScript( lines ) )
+            continue;
+
          auto entry = std::make_unique<SearchEntry>();
          entry->type = EntryType::Script;
          entry->scriptPath = scriptPath;
          try
          {
-            entry->iconPath = ScriptIconPath( scriptPath );
+            entry->iconPath = ScriptIconPath( scriptPath, lines );
          }
          catch ( ... )
          {
