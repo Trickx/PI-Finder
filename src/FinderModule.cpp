@@ -47,10 +47,12 @@ namespace
 
 void RestoreVisiblePosition( Control& window, const pcl::Point* savedPosition )
 {
-   auto isFullyOnDisplay = []( const pcl::Rect& windowRect, const pcl::Rect& displayRect )
+   auto isVisibleOnDisplay = []( const pcl::Rect& windowRect, const pcl::Rect& displayRect )
    {
-      return windowRect.x0 >= displayRect.x0 && windowRect.y0 >= displayRect.y0 &&
-             windowRect.x1 <= displayRect.x1 && windowRect.y1 <= displayRect.y1;
+      int visibleWidth = Min( windowRect.x1, displayRect.x1 ) - Max( windowRect.x0, displayRect.x0 );
+      int visibleHeight = Min( windowRect.y1, displayRect.y1 ) - Max( windowRect.y0, displayRect.y0 );
+      return visibleWidth >= Min( 64, windowRect.Width() ) &&
+             visibleHeight >= Min( 32, windowRect.Height() );
    };
 
    auto moveToDisplayCenter = [&window]( const pcl::Rect& displayRect )
@@ -93,7 +95,7 @@ void RestoreVisiblePosition( Control& window, const pcl::Point* savedPosition )
    }
 
    for ( const pcl::Rect& displayRect : displayRects )
-      if ( isFullyOnDisplay( windowRect, displayRect ) )
+      if ( isVisibleOnDisplay( windowRect, displayRect ) )
       {
          if ( savedPosition != nullptr )
             window.Move( *savedPosition );
@@ -127,7 +129,7 @@ void RestoreVisiblePosition( Control& window, const pcl::Point* savedPosition )
       }, reinterpret_cast<LPARAM>( &displayRects ) );
 
    for ( const pcl::Rect& displayRect : displayRects.displays )
-      if ( isFullyOnDisplay( windowRect, displayRect ) )
+      if ( isVisibleOnDisplay( windowRect, displayRect ) )
       {
          if ( savedPosition != nullptr )
             window.Move( *savedPosition );
@@ -143,7 +145,7 @@ void RestoreVisiblePosition( Control& window, const pcl::Point* savedPosition )
    int screen = DefaultScreen( display );
    pcl::Rect displayRect( 0, 0, XDisplayWidth( display, screen ), XDisplayHeight( display, screen ) );
    XCloseDisplay( display );
-   if ( isFullyOnDisplay( windowRect, displayRect ) )
+   if ( isVisibleOnDisplay( windowRect, displayRect ) )
    {
       if ( savedPosition != nullptr )
          window.Move( *savedPosition );
@@ -544,10 +546,16 @@ public:
       return ok;
    }
 
+   // Only called upon module unload, when the window may already be hidden or
+   // gone. The geometry is therefore saved whenever it changes; this is just a
+   // last update while the window is still in a valid state.
    void SaveSettings() const override
    {
-      if ( m_gui != nullptr )
-         SaveGeometry();
+      if ( m_gui != nullptr && m_savePositionEnabled && IsVisible() )
+      {
+         SaveWindowPosition( Position() );
+         SaveWindowWidth();
+      }
    }
 
    static bool MinimizeWithoutFocus()
@@ -667,6 +675,12 @@ private:
    std::unique_ptr<GUIData> m_gui;
    std::unique_ptr<Timer> m_startupTimer;
    std::unique_ptr<Timer> m_focusTimer;
+   std::unique_ptr<Timer> m_launchTimer;
+   bool m_launchPending = false;
+   bool m_pendingClose = false;
+   EntryType m_pendingType = EntryType::Process;
+   IsoString m_pendingProcessId;
+   String m_pendingScriptPath;
    bool m_windowActive = true;
    bool m_launchedFromInstance = false;
    bool m_executingInstance = false;
@@ -674,6 +688,7 @@ private:
    bool m_savePositionEnabled = false;
    bool m_collapsed = false;
    int m_expandedWidth = 0;
+   int m_candidateWidth = 0;
    bool m_resultsHeightMeasured = false;
    bool m_resultsShown = true;
 
@@ -688,6 +703,8 @@ private:
    }
 
    // The window height follows the result list; only its width is resizable.
+   // AdjustToContents() also sets the width to its natural size, so the
+   // previous width is restored exactly (the layout's minimum still applies).
    void UpdateWindowHeight()
    {
       if ( m_collapsed )
@@ -696,7 +713,7 @@ private:
       SetVariableHeight();
       AdjustToContents();
       SetFixedHeight();
-      Resize( Max( width, Width() ), Height() );
+      Resize( width, Height() );
    }
 
    // Without focus the window shrinks to a narrow search line.
@@ -705,7 +722,10 @@ private:
       if ( m_collapsed )
          return;
       m_collapsed = true;
-      m_expandedWidth = Width();
+      // The expanded width is tracked by TrackExpandedWidth(); Width() may
+      // still be stale here, e.g. right after the width was restored.
+      if ( m_expandedWidth <= 0 )
+         m_expandedWidth = Width();
       m_gui->results.Hide();
       m_gui->search.SetScaledMinWidth( CollapsedSearchWidth );
       SetVariableSize();
@@ -723,7 +743,8 @@ private:
       SetVariableSize();
       AdjustToContents();
       SetFixedHeight();
-      Resize( Max( m_expandedWidth, Width() ), Height() );
+      if ( m_expandedWidth > 0 )
+         Resize( m_expandedWidth, Height() );
       m_gui->search.Focus();
    }
 
@@ -754,6 +775,59 @@ private:
       IsoString key = SettingsKey() + "Geometry/";
       Settings::Write( key + "Left", position.x );
       Settings::Write( key + "Top", position.y );
+   }
+
+   // The height follows the result list, so only the (expanded) width is
+   // stored, in logical pixels.
+   static IsoString WidthKey()
+   {
+      return "Interfaces/Finder/Geometry/ExpandedWidth";
+   }
+
+   static constexpr int DefaultWidth = ExpandedSearchWidth + 2*8;
+
+   void SaveWindowWidth() const
+   {
+      if ( m_expandedWidth > 0 )
+         Settings::Write( WidthKey(), PhysicalPixelsToLogical( m_expandedWidth ) );
+   }
+
+   void RestoreWindowWidth()
+   {
+      int width = DefaultWidth;
+      Settings::Read( WidthKey(), width );
+      m_expandedWidth = LogicalPixelsToPhysical( Max( width, DefaultWidth ) );
+      m_candidateWidth = 0;
+      if ( !m_collapsed )
+         Resize( m_expandedWidth, Height() );
+   }
+
+   // Called from the focus timer. Resize events are not used to store the
+   // width: on macOS they arrive asynchronously, so the intermediate sizes of
+   // collapsing, expanding and layout updates cannot be told apart from user
+   // resizes. A width is only taken over once the expanded window has kept it
+   // for two consecutive timer ticks; all programmatic changes are completed
+   // within a single event handler.
+   void TrackExpandedWidth()
+   {
+      if ( !m_savePositionEnabled || m_collapsed )
+      {
+         m_candidateWidth = 0;
+         return;
+      }
+      int width = Width();
+      if ( width <= 0 )
+         return;
+      if ( width != m_candidateWidth )
+      {
+         m_candidateWidth = width;
+         return;
+      }
+      if ( width != m_expandedWidth )
+      {
+         m_expandedWidth = width;
+         SaveWindowWidth();
+      }
    }
 
    std::vector<std::unique_ptr<SearchEntry>> m_entries;
@@ -789,8 +863,7 @@ private:
       SetWindowTitle( "Finder" );
       OnMove( (Control::move_event_handler)&FinderInterface::e_WindowMoved, *this );
       AdjustToContents();
-      // Only the position is restored; every session starts at the default width.
-      Resize( LogicalPixelsToPhysical( ExpandedSearchWidth + 2*8 ), Height() );
+      RestoreWindowWidth();
 
       // Estimated until the first result row can be measured.
       int rowHeight = Max( m_gui->results.Font().Height(), LogicalPixelsToPhysical( 16 ) ) + LogicalPixelsToPhysical( 4 );
@@ -924,8 +997,15 @@ private:
       m_gui->results.SetCurrentNode( m_gui->results.Child( index ) );
    }
 
+   // The selected entry is only remembered here and launched from a timer,
+   // once the key or activation event has returned. Launching directly from
+   // the event handler deleted the result nodes while the TreeBox was still
+   // dispatching their event, and ran scripts (with their modal dialogs) in a
+   // nested event loop inside the search line's key handler.
    void ActivateCurrent( bool closeWindow = false )
    {
+      if ( m_launchPending )
+         return;
       const TreeBox::Node* current = m_gui->results.CurrentNode();
       if ( current == nullptr )
          return;
@@ -933,37 +1013,100 @@ private:
       if ( index < 0 || size_type( index ) >= m_visibleEntries.size() )
          return;
 
-      // The search window either closes or stays open behind the launched
-      // process or script, with an empty query and no result list.
+      // Copied, so that nothing refers to the result list once it is cleared.
       const SearchEntry& entry = *m_entries[m_visibleEntries[size_type( index )]];
-      ClearSearch();
-      if ( closeWindow )
-         Hide();
-      if ( entry.type == EntryType::Process )
-      {
-         if ( !pcl::Process( entry.processId ).Launch() )
-            MessageBox( "The selected process could not be launched.",
-                        "Finder", StdIcon::Error ).Execute();
-         return;
-      }
+      m_pendingType = entry.type;
+      m_pendingProcessId = entry.processId;
+      m_pendingScriptPath = entry.scriptPath;
+      m_pendingClose = closeWindow;
+      m_launchPending = true;
 
+      if ( m_launchTimer == nullptr )
+      {
+         m_launchTimer = std::make_unique<Timer>();
+         m_launchTimer->SetSingleShot();
+         m_launchTimer->SetInterval( 0 );
+         m_launchTimer->OnTimer( (Timer::timer_event_handler)&FinderInterface::e_LaunchTimer, *this );
+      }
+      m_launchTimer->Start();
+   }
+
+   // The search window either closes or stays open behind the launched
+   // process or script, with an empty query and no result list.
+   void LaunchPending()
+   {
+      ClearSearch();
+      if ( m_pendingClose )
+         Hide();
+
+      if ( m_pendingType == EntryType::Process )
+      {
+         if ( !pcl::Process( m_pendingProcessId ).Launch() )
+            throw Error( "The process " + String( m_pendingProcessId ) + " could not be launched." );
+      }
+      else
+         Console().ExecuteScript( m_pendingScriptPath );
+   }
+
+   // No exception may leave an event handler: the dispatcher does not catch
+   // it, so it would reach the core and terminate PixInsight.
+   // Periodic handlers only log, so that a persistent error cannot open one
+   // message box after another.
+   template <typename F>
+   void Guarded( F f, bool showDialog = true )
+   {
       try
       {
-         Console().ExecuteScript( entry.scriptPath );
+         f();
       }
-      catch ( const Error& error )
+      catch ( const Exception& error )
       {
-         MessageBox( error.Message(), "Finder", StdIcon::Error ).Execute();
+         ShowError( error.Message(), showDialog );
       }
+      catch ( const std::exception& error )
+      {
+         ShowError( String( error.what() ), showDialog );
+      }
+      catch ( ... )
+      {
+         ShowError( "Unknown error.", showDialog );
+      }
+   }
+
+   static void ShowError( const String& message, bool showDialog )
+   {
+      try
+      {
+         Console().CriticalLn( "<end><cbr>** Finder: " + message );
+         if ( showDialog )
+            MessageBox( message, "Finder", StdIcon::Error ).Execute();
+      }
+      catch ( ... )
+      {
+      }
+   }
+
+   void e_LaunchTimer( Timer& )
+   {
+      Guarded( [this]() { LaunchPending(); } );
+      m_launchPending = false;
    }
 
    void e_StartupTimer( Timer& )
    {
-      m_startupTimer->Stop();
-      ProcessInterface::Launch();
+      Guarded( [this]()
+      {
+         m_startupTimer->Stop();
+         ProcessInterface::Launch();
+      } );
    }
 
    void e_FocusTimer( Timer& )
+   {
+      Guarded( [this]() { UpdateFocusState(); }, false/*showDialog*/ );
+   }
+
+   void UpdateFocusState()
    {
       if ( m_visibilityCheckPending && IsVisible() )
       {
@@ -972,12 +1115,15 @@ private:
          pcl::Point savedPosition = Position();
          bool hasSavedPosition = Settings::Read( key + "Left", savedPosition.x ) &&
                                  Settings::Read( key + "Top", savedPosition.y );
+         // Applied again once shown, in case the first Show() changed the size.
+         RestoreWindowWidth();
          RestoreVisiblePosition( *this, hasSavedPosition ? &savedPosition : nullptr );
          m_savePositionEnabled = true;
          SaveWindowPosition( Position() );
       }
       if ( !IsVisible() )
          return;
+      TrackExpandedWidth();
       bool active = IsActiveWindow();
       if ( m_windowActive && !active && MinimizeWithoutFocus() )
          Collapse();
@@ -987,53 +1133,56 @@ private:
    void e_WindowMoved( Control&, const pcl::Point& newPosition, const pcl::Point& )
    {
       if ( m_savePositionEnabled )
-         SaveWindowPosition( newPosition );
+         Guarded( [&]() { SaveWindowPosition( newPosition ); } );
    }
 
    // Clicking into the search line (or activating the window) expands it.
    void e_SearchGetFocus( Control& )
    {
-      Expand();
+      Guarded( [this]() { Expand(); } );
    }
 
    void e_TextUpdated( Edit&, const String& )
    {
-      RefreshResults();
+      Guarded( [this]() { RefreshResults(); } );
    }
 
    void e_NodeActivated( TreeBox&, TreeBox::Node&, int )
    {
-      ActivateCurrent( m_launchedFromInstance );
+      Guarded( [this]() { ActivateCurrent( m_launchedFromInstance ); } );
    }
 
    void e_KeyPress( Control&, int key, unsigned, bool& wantsKey )
    {
       wantsKey = true;
-      switch ( key )
+      Guarded( [&]()
       {
-      case KeyCode::Return:
-         ActivateCurrent( m_launchedFromInstance || CloseAfterLaunch() );
-         break;
-      case KeyCode::Up:
-         MoveSelection( -1 );
-         break;
-      case KeyCode::Down:
-         MoveSelection( +1 );
-         break;
-      case KeyCode::PageUp:
-         MoveSelection( -10 );
-         break;
-      case KeyCode::PageDown:
-         MoveSelection( +10 );
-         break;
-      case KeyCode::Escape:
-         // Escape only clears the query; the window is never closed by it.
-         ClearSearch();
-         break;
-      default:
-         wantsKey = false;
-         break;
-      }
+         switch ( key )
+         {
+         case KeyCode::Return:
+            ActivateCurrent( m_launchedFromInstance || CloseAfterLaunch() );
+            break;
+         case KeyCode::Up:
+            MoveSelection( -1 );
+            break;
+         case KeyCode::Down:
+            MoveSelection( +1 );
+            break;
+         case KeyCode::PageUp:
+            MoveSelection( -10 );
+            break;
+         case KeyCode::PageDown:
+            MoveSelection( +10 );
+            break;
+         case KeyCode::Escape:
+            // Escape only clears the query; the window is never closed by it.
+            ClearSearch();
+            break;
+         default:
+            wantsKey = false;
+            break;
+         }
+      } );
    }
 };
 
